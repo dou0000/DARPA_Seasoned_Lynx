@@ -16,7 +16,7 @@ from common import utils
 from data.dataset import FSSDataset
 from SAM2pred import SAM_pred
 
-# from ipdb import set_trace as bp
+from ipdb import set_trace as bp
 import numpy as np
 import wandb
 import tqdm 
