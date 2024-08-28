@@ -11,4 +11,15 @@ CUDA_VISIBLE_DEVICES=${GPU_ID} python3 -m torch.distributed.launch --nproc_per_n
                         --condition mask \
                         --lr 1e-4 \
                         --fold 0 \
-                        --logpath trn1_coco_mask_fold0
+                        --logpath trn1_coco_mask_fold0 \
+                        --nworker 2 \
+                        --mask_decoder_trainable True
+
+
+# CUDA_VISIBLE_DEVICES=${GPU_ID} python3 train.py \
+#                         --epochs 50 \
+#                         --condition mask \
+#                         --lr 1e-4 \
+#                         --fold 0 \
+#                         --logpath trn1_coco_mask_fold0 \
+#                         --nworker 0

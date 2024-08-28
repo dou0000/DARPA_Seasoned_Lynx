@@ -4,41 +4,57 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
+from model.sam_lora import LoRA_Sam
 
-class  SAM_pred(nn.Module):
-    def __init__(self, ):
+class SAM_pred(nn.Module):
+    def __init__(self, mask_decoder_trainable=False, lora_train=False, args=None):
         super().__init__()
-        self.sam_model = sam_model_registry['vit_h']('/root/paddlejob/workspace/env_run/vrp_sam/sam_vit_h_4b8939.pth')
+
+        self.lora_train = lora_train
+
+
+        # self.sam_model = sam_model_registry['vit_h']('/root/paddlejob/workspace/env_run/vrp_sam/sam_vit_h_4b8939.pth')
+        self.sam_model = sam_model_registry['vit_h']('/u/dkwark/VRP-SAM/base_ckpt/sam_ckpt/sam_vit_h_4b8939.pth')
         self.sam_model.eval()
+        
+        # no grad required for the model
+        for name, param in self.sam_model.named_parameters():
+            param.requires_grad = False
+
+        self.mask_decoder = self.sam_model.mask_decoder
+
+        # only make the mask decoder trainable
+        if mask_decoder_trainable:
+            for name, param in self.sam_model.named_parameters():
+                if 'mask_decoder' in name:
+                    param.requires_grad = True
+
+        # only make the lora trainable
+        if lora_train:
+            self.sam_model = LoRA_Sam(args, self.sam_model, r=args.lora_r).sam
+
+
+        # check if the model is freezed
+        # for name, param in self.sam_model.named_parameters():
+        #     print(name, param.requires_grad)
+        
+
+        # unfreeze the model
+        # for param in self.sam_model.parameters():
+        #     param.requires_grad = True
+            
 
     def forward_img_encoder(self, query_img):
         query_img = F.interpolate(query_img, (1024,1024), mode='bilinear', align_corners=True)
-
-        with torch.no_grad():
+        if self.lora_train:
             query_feats = self.sam_model.image_encoder(query_img)
-        return  query_feats
-    
-    def get_feat_from_np(self, query_img, query_name, protos):
-        np_feat_path = '/root/paddlejob/workspace/env_run/vrp_sam/feats_np/coco/'
-        if not os.path.exists(np_feat_path): os.makedirs(np_feat_path)
-        files_name = os.listdir(np_feat_path)
-        query_feat_list = []
-        for idx, name in enumerate(query_name):
-            if '/root' in name:
-                name = os.path.splitext(name.split('/')[-1])[0]
-                
-            if name + '.npy' not in files_name:
-                query_feats_np = self.forward_img_encoder(query_img[idx, :, :, :].unsqueeze(0))
-                query_feat_list.append(query_feats_np)
-                query_feats_np = query_feats_np.detach().cpu().numpy()
-                np.save(np_feat_path + name + '.npy', query_feats_np)
-            else:
-                sub_query_feat = torch.from_numpy(np.load(np_feat_path + name + '.npy')).to(protos.device)
-                query_feat_list.append(sub_query_feat)
-                del sub_query_feat
-        query_feats_np = torch.cat(query_feat_list, dim=0)
-        return query_feats_np
+        else:
+            with torch.no_grad():
+                query_feats = self.sam_model.image_encoder(query_img)
 
+        # query_feats = self.sam_model.image_encoder(query_img)
+        return query_feats
+    
     def get_pormpt(self, protos, points_mask=None):
         if points_mask is not None :
             point_mask = points_mask
@@ -80,11 +96,8 @@ class  SAM_pred(nn.Module):
         
         # query_img = F.interpolate(query_img, (1024,1024), mode='bilinear', align_corners=True)
         protos, point_prompt = self.get_pormpt(protos, points_mask)
-        with torch.no_grad():
-            #-------------save_sam_img_feat-------------------------
-            # query_feats = self.forward_img_encoder(query_img)
-
-            query_feats = self.get_feat_from_np(query_img, query_name, protos)
+        query_feats = self.forward_img_encoder(query_img)
+            
 
         q_sparse_em, q_dense_em = self.forward_prompt_encoder(
                 points=point_prompt,

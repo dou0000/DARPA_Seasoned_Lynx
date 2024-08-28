@@ -3,7 +3,21 @@ from torch import Tensor
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
 from typing import Type, Any, Callable, Union, List, Optional
+# from torchvision.models.resnet import model_urls
+from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models.resnet import conv3x3, conv1x1, BasicBlock, Bottleneck
+# model_zoo
+from torch.utils import model_zoo
 
+import pytorch_lightning as pl
+
+from transformers import Dinov2Model, Dinov2Config
+
+import torch.functional as F
+
+
+
+from pdb import set_trace as bp
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152', 'resnext50_32x4d', 'resnext101_32x8d',
@@ -32,6 +46,116 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, d
 def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+def convrelu(in_channels, out_channels, kernel, padding):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel, padding=padding),
+        nn.ReLU(inplace=True),
+    )
+
+class DoubleConv(nn.Module):
+    """(convolution => [BN] => ReLU) * 2"""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        super().__init__()
+        if not mid_channels:
+            mid_channels = out_channels
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+class Down(nn.Module):
+    """Downscaling with maxpool then double conv"""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, out_channels)
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+class Up(nn.Module):
+    """Upscaling then double conv"""
+
+    def __init__(self, in_channels, out_channels, bilinear=True):
+        super().__init__()
+
+        # if bilinear, use the normal convolutions to reduce the number of channels
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+        else:
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+            self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        # input is CHW
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2])
+        # if you have padding issues, see
+        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
+        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+class OutConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(OutConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+class UNet(pl.LightningModule):
+    def __init__(self, n_channels=6, n_classes=1, bilinear=False):
+        super(UNet, self).__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.bilinear = bilinear
+
+        self.inc = (DoubleConv(n_channels, 64))
+        self.down1 = (Down(64, 128))
+        self.down2 = (Down(128, 256))
+        self.down3 = (Down(256, 512))
+        factor = 2 if bilinear else 1
+        self.down4 = (Down(512, 1024 // factor))
+        self.up1 = (Up(1024, 512 // factor, bilinear))
+        self.up2 = (Up(512, 256 // factor, bilinear))
+        self.up3 = (Up(256, 128 // factor, bilinear))
+        self.up4 = (Up(128, 64, bilinear))
+        self.outc = (OutConv(64, n_classes))
+
+    def forward(self, map, legend):
+        x = torch.cat((map, legend),axis=1)
+        # print(x.size(),map.size(),legend.size())
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        logits = self.outc(x)
+        # logits = torch.argmax(logits, dim=1)
+        # print(logits.size())
+        return logits
 
 
 class BasicBlock(nn.Module):
@@ -270,18 +394,134 @@ def _resnet(
     arch: str,
     block: Type[Union[BasicBlock, Bottleneck]],
     layers: List[int],
-    pretrained: bool,
+    pretrained: Union[bool, str],
     progress: bool,
     **kwargs: Any
 ) -> ResNet:
     model = ResNet(block, layers, **kwargs)
-    if pretrained:
-        # state_dict = load_state_dict_from_url(model_urls[arch],
-        #                                       progress=progress)
+    if isinstance(pretrained, bool) and pretrained:
+        state_dict = load_state_dict_from_url(model_urls[arch], progress=progress)
+        model.load_state_dict(state_dict)
+    elif isinstance(pretrained, str):
         state_dict = torch.load(pretrained, map_location='cpu')
         model.load_state_dict(state_dict)
     return model
 
+class SegmentationModel(pl.LightningModule):
+    def __init__(self, model_name="Unet", n_channels=6, n_classes=2, superpixel_weights=None, heatmap=False, edge=False, optimizer_type="adam", scheduler_type="reducelr", learning_rate=1e-3):
+        super(SegmentationModel, self).__init__()
+        
+        self.superpixel = superpixel_weights is not None
+        self.heatmap = heatmap
+
+        if edge:
+            n_channels -= 2
+
+        self.superpixel_model = None
+
+        if heatmap:
+            n_channels += 1
+
+        if model_name == "Unet":
+            self.model = UNet(n_channels=n_channels, n_classes=n_classes)
+        else:
+            raise NotImplementedError(f"Model {model_name} not implemented.")
+
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer_type = optimizer_type
+        self.scheduler_type = scheduler_type
+        self.learning_rate = learning_rate
+
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+class Golden_Muscat(pl.LightningModule):
+    def __init__(self, pretrained):
+        super(Golden_Muscat, self).__init__()
+        # self.model = UNet(n_channels=6, n_classes=1)
+
+        # model_path = '/u/dkwark/VRP-SAM/base_ckpt/jaccard_index_value=0.9229.ckpt'
+        model_path = '/u/dkwark/bcxi/shared/models/golden_muscat-0.3.ckpt'
+        # debug = SegmentationModel(model_name="Unet", n_channels=6, n_classes=1)
+        self.model = SegmentationModel.load_from_checkpoint(
+            checkpoint_path=model_path,
+            model_name="Unet"
+        )
+
+        
+        # if pretrained:
+        #     checkpoint_path = '/u/dkwark/VRP-SAM/base_ckpt/jaccard_index_value=0.9229.ckpt'
+        #     # Use load_from_checkpoint directly on the UNet class
+        #     self.model = UNet.load_from_checkpoint(checkpoint_path, n_channels=6, n_classes=1, bilinear=False)
+        # else:
+        #     raise NotImplementedError
+        
+        self.model.eval()
+        self.layer0 = self.model.model.inc
+        self.layer1 = self.model.model.down1
+        self.layer2 = self.model.model.down2
+        self.layer3 = self.model.model.down3
+        self.layer4 = self.model.model.down4
+
+    def forward(self, map, legend):
+        return self.model(map, legend)
+
+
+
+class DINO_V2(nn.Module):
+    def __init__(self, pretrained):
+        super(DINO_V2, self).__init__()
+        if pretrained:
+            self.model = Dinov2Model.from_pretrained("facebook/dinov2-large")
+            # freeze the model
+            for param in self.model.parameters():
+                param.requires_grad = False
+        else:
+            raise NotImplementedError
+        
+        layers = [self.model.embeddings] + [self.model.encoder.layer[i] for i in range(12)]
+        self.layer0 = nn.Sequential(*layers[:2])
+        self.layer1 = nn.Sequential(*layers[2:4])
+        self.layer2 = nn.Sequential(*layers[4:7])
+        self.layer3 = nn.Sequential(*layers[7:10])
+        self.layer4 = nn.Sequential(*layers[10:])
+
+        # self.embeddings = self.model.embeddings
+        # self.encoder_layers = self.model.encoder.layer
+
+        # self.layer0 = nn.Sequential(self.embeddings, *self.encoder_layers[:1])
+        # self.layer1 = nn.Sequential(*self.encoder_layers[1:3])
+        # self.layer2 = nn.Sequential(*self.encoder_layers[3:6])
+        # self.layer3 = nn.Sequential(*self.encoder_layers[6:9])
+        # self.layer4 = nn.Sequential(*self.encoder_layers[9:])
+
+def golden_muscat(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> Golden_Muscat:
+    r"""Golden Muscat model from
+    `"Golden Muscat" <https://arxiv.org/pdf/2104.14294.pdf>`_.
+
+    Args:
+        pretrained (bool): If True, returns a pre-trained model
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    return Golden_Muscat(pretrained)
+
+
+def _dino_v2(pretrained: bool):
+    model = DINO_V2(pretrained)
+
+    return model
+
+
+def dino_v2(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> DINO_V2:
+    r"""DINO-V2 model from
+    `"Emerging Properties in Self-Supervised Vision Transformers" <https://arxiv.org/pdf/2104.14294.pdf>`_.
+
+    Args:
+        pretrained (bool): If True, returns a pre-trained model
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    return _dino_v2(pretrained)
 
 def resnet18(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNet:
     r"""ResNet-18 model from
@@ -307,19 +547,36 @@ def resnet34(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> 
                    **kwargs)
 
 
-def resnet50(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNet:
-    r"""ResNet-50 model from
-    `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
+# def resnet50(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ResNet:
+#     r"""ResNet-50 model from
+#     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_.
 
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
+#     Args:
+#         pretrained (bool): If True, returns a model pre-trained on ImageNet
+#         progress (bool): If True, displays a progress bar of the download to stderr
+#     """
+#     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+#     if pretrained:
+#         # model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+#         # model_path = '/root/paddlejob/workspace/env_run/vrp_sam/resnet50_v2.pth'
+#         # model.load_state_dict(torch.load(model_path), strict=False)
+#         # return _resnet('resnet50', Bottleneck, [3, 4, 6, 3], pretrained, progress, **kwargs)
+#         # return resnet50(weights=ResNet50_Weights.DEFAULT)
+#         # state_dict = torch.load(pretrained, map_location='cpu')
+#         # model.load_state_dict(state_dict)
+        
+
+
+#     return model
+
+# Function to create a ResNet-50 model and load pretrained weights
+def resnet50(pretrained: bool = True, progress: bool = True, **kwargs: Any) -> ResNet:
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model_url = 'https://download.pytorch.org/models/resnet50-19c8e357.pth'
     if pretrained:
-        # model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
-        model_path = '/root/paddlejob/workspace/env_run/vrp_sam/resnet50_v2.pth'
-        model.load_state_dict(torch.load(model_path), strict=False)
+        state_dict = torch.hub.load_state_dict_from_url(model_url, progress=progress)
+        model.load_state_dict(state_dict)
+        
     return model
 
 
@@ -333,9 +590,10 @@ def resnet101(pretrained: bool = False, progress: bool = True, **kwargs: Any) ->
     """
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
-        # model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
-        model_path = '/root/paddlejob/workspace/env_run/vrp_sam/resnet101_v2.pth'
-        model.load_state_dict(torch.load(model_path), strict=False)
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+        # model_path = '/root/paddlejob/workspace/env_run/vrp_sam/resnet101_v2.pth'
+        # model.load_state_dict(torch.load(model_path), strict=False)
+
     return model
 
 

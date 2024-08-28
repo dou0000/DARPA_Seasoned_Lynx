@@ -1,0 +1,13 @@
+# Ignore everything by default
+*
+
+# But allow the following files and directories
+!/.gitignore
+!/base_ckpt/
+!/common/
+!/data/
+!/model/
+!/segment-anything/
+!/SAM2pred.py
+!/train.py
+!/README.md

@@ -1,5 +1,5 @@
 
-:=========== Few-shot Seg. with HSNet ===========
+:=========== Few-shot Seg. with VRP-SAM ===========
 |             datapath: /root/paddlejob/workspace/env_run/datsets/
 |            benchmark: coco                    
 |              logpath: trn1_coco_mask_fold0    
@@ -15,7 +15,7 @@
 |           local_rank: 0                       
 |            num_query: 50                      
 |             backbone: resnet50                
-:================================================
+:==================================================
 
 Backbone # param.: 23685367
 Learnable # param.: 1592064
