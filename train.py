@@ -104,7 +104,7 @@ def train(args, epoch, model, sam_model, dataloader, optimizer, scheduler, train
                           training,
                           additional_legend_support_img)
 
-        low_masks, pred_mask = sam_model(batch['query_img'], batch['query_name'], protos)
+        low_masks, pred_mask = sam_model(batch['query_img'], protos, batch['query_name'])
         logit_mask = low_masks
         
         pred_mask = torch.sigmoid(logit_mask) > 0.5
