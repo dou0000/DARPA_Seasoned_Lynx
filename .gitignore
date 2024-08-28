@@ -7,6 +7,8 @@
 !/common/
 !/data/
 !/model/
+!/model/*.py
+!/model/**/*.py
 !/segment-anything/
 !/SAM2pred.py
 !/train.py
