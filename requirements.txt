@@ -1,0 +1,9 @@
+opencv-python
+wandb
+tqdm
+matplotlib
+pytorch_lightning
+h5image
+ipdb
+transformers
+peft

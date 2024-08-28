@@ -328,30 +328,6 @@ if __name__ == '__main__':
 
     sam_model = SAM_pred(args.mask_decoder_trainable, lora_train=args.lora, args=args)
 
-    # # call dino model
-    # if args.backbone == 'dino_v2':
-    #     dino_config = Dinov2Config()
-    #     dino_model = Dinov2Model(dino_config)
-
-    # # lora model
-    # if args.lora:
-    #     # lora_config = LoraConfig(
-    #     #     r=32,
-    #     #     lora_alpha=32,
-    #     #     target_modules=['query', 'value'],
-    #     #     lora_dropout=0.1,
-    #     #     bias='lora_only',
-    #     # )
-    #     # bp()
-    #     sam_model = LoRA_Sam(sam_model.sam_model, r=32)
-        # lora_model = get_peft_model(dino_model, lora_config)
-        # lora_model = get_peft_model(sam_model.sam_model, lora_config)
-
-    # if not args.lora:    
-    #     sam_model.to(device)
-    # else:
-    #     lora_sam.to(device)
-
     sam_model.to(device)
     model.to(device)
 
