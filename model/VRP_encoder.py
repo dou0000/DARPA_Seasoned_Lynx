@@ -231,9 +231,8 @@ class VRP_encoder(nn.Module):
 
             # for name, param in self.dino_v2.named_parameters():
             #     print(name, param.requires_grad)
-
             
-
+            
         elif backbone == 'golden_muscat':
             golden_muscat = models.golden_muscat(pretrained=pretrained)
             self.layer0 = golden_muscat.layer0
