@@ -2,7 +2,7 @@ import torch
 
 import open_clip
 
-from src import utils
+from src_additional import clip_utils
 from argparse import Namespace
 from pdb import set_trace as bp
 
@@ -89,12 +89,12 @@ class ClassificationHead(torch.nn.Linear):
 
     def save(self, filename):
         print(f'Saving classification head to {filename}')
-        utils.torch_save(self, filename)
+        clip_utils.torch_save(self, filename)
 
     @classmethod
     def load(cls, filename):
         print(f'Loading classification head from {filename}')
-        return utils.torch_load(filename)
+        return clip_utils.torch_load(filename)
 
 
 class ImageClassifier(torch.nn.Module):
@@ -120,12 +120,12 @@ class ImageClassifier(torch.nn.Module):
 
     def save(self, filename):
         print(f'Saving image classifier to {filename}')
-        utils.torch_save(self, filename)
+        clip_utils.torch_save(self, filename)
 
     @classmethod
     def load(cls, filename):
         print(f'Loading image classifier from {filename}')
-        return utils.torch_load(filename)
+        return clip_utils.torch_load(filename)
 
 
 class MultiHeadImageClassifier(torch.nn.Module):
@@ -152,9 +152,9 @@ class MultiHeadImageClassifier(torch.nn.Module):
 
     def save(self, filename):
         print(f'Saving image classifier to {filename}')
-        utils.torch_save(self, filename)
+        clip_utils.torch_save(self, filename)
 
     @classmethod
     def load(cls, filename):
         print(f'Loading image classifier from {filename}')
-        return utils.torch_load(filename)
+        return clip_utils.torch_load(filename)
