@@ -52,6 +52,8 @@ class FSSDataset:
         overlap = '32' if args.backbone == 'golden_muscat' else '15'
         if args.overlap is not None:
             overlap = args.overlap
+
+
         dataset = cls.datasets[benchmark](cls.datapath, 
                                           fold=fold, 
                                           transform=cls.transform, 
@@ -107,6 +109,7 @@ class FSSDataset:
 
             # Subset the dataset
             dataset = torch.utils.data.Subset(dataset, indices[start_index:end_index])
+
 
         dataloader = DataLoader(dataset, batch_size=bsz, shuffle=shuffle, pin_memory=True, num_workers=nworker)
 

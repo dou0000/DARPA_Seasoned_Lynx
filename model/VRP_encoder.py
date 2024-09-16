@@ -16,6 +16,7 @@ from transformers import Dinov2Model, Dinov2Config, CLIPModel
 
 from .base.transformer_decoder import transformer_decoder
 from peft import LoraConfig, get_peft_model
+from src.modeling import ImageEncoder
 
 # copy from SEEM
 def get_bounding_boxes(mask):
@@ -186,6 +187,24 @@ class VRP_encoder(nn.Module):
             resnet = models.resnet101(pretrained=pretrained)
             self.layer0 = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu1, resnet.conv2, resnet.bn2, resnet.relu2, resnet.conv3, resnet.bn3, resnet.relu3, resnet.maxpool)
             self.layer1, self.layer2, self.layer3, self.layer4 = resnet.layer1, resnet.layer2, resnet.layer3, resnet.layer4
+        elif backbone == 'clip':
+            # self.clip_model, _, _ = open_clip.create_model_and_transforms(
+            #     'ViT-L-14', pretrained='openai', cache_dir='./.cache/open_clip'
+            # )
+            model_name = 'ViT-L-14'
+            checkpoint_path = 'base_ckpt/finetuned.pt'
+
+            # Load the model
+            self.clip_model = ImageEncoder.load(checkpoint_path)
+            
+            # model_object = torch.load('base_ckpt/finetuned.pt')
+            # state_dict = model_object['model']
+            # self.clip_model.load_state_dict(state_dict)
+            self.clip_model.eval()
+
+            for param in self.clip_model.parameters():
+                param.requires_grad = False
+
         elif backbone == 'dino_v2':
             # dinov2 = models.dino_v2(pretrained=pretrained)
             # self.curr_model = dinov2 # for debug purpose
@@ -232,6 +251,10 @@ class VRP_encoder(nn.Module):
             # for name, param in self.dino_v2.named_parameters():
             #     print(name, param.requires_grad)
 
+        # elif backbone == 'clip':
+        #     import openclip
+        #     self.clip_model = openclip.
+
             
 
         elif backbone == 'golden_muscat':
@@ -242,7 +265,7 @@ class VRP_encoder(nn.Module):
         else:
             raise Exception('Unavailable backbone: %s' % backbone)
         
-        if args.prompt_backbone_trainable and backbone != 'dino_v2':
+        if args.prompt_backbone_trainable and backbone not in ['dino_v2', 'clip']:
             self.layer0.train(), self.layer1.train(), self.layer2.train(), self.layer3.train(), self.layer4.train()
             for param in self.layer0.parameters():
                 param.requires_grad = True
@@ -254,12 +277,12 @@ class VRP_encoder(nn.Module):
                 param.requires_grad = True
             for param in self.layer4.parameters():
                 param.requires_grad = True
-        elif backbone != 'dino_v2':
+        elif backbone != 'dino_v2' and backbone != 'clip':
             self.layer0.eval(), self.layer1.eval(), self.layer2.eval(), self.layer3.eval(), self.layer4.eval()
 
         if backbone == 'vgg16':
             fea_dim = 512 + 256
-        elif backbone == 'dino_v2':
+        elif backbone in ['dino_v2', 'clip']:
             fea_dim = 1024 + 1024
             # fea_dim = 257 + 257
         elif backbone == 'golden_muscat':
@@ -285,10 +308,10 @@ class VRP_encoder(nn.Module):
         #     nn.ReLU(inplace=True),
         # )
 
-        convnd = nn.Conv2d(fea_dim, hidden_dim, kernel_size=1, padding=0, bias=False) if backbone != 'dino_v2' or args.arch_testing \
+        convnd = nn.Conv2d(fea_dim, hidden_dim, kernel_size=1, padding=0, bias=False) if backbone not in ['dino_v2', 'clip'] or args.arch_testing \
            else nn.Conv1d(fea_dim, hidden_dim, kernel_size=1, padding=0, bias=False)
 
-        dropoutnd = nn.Dropout2d(p=0.5) if backbone != 'dino_v2' else nn.Dropout(p=0.5)
+        dropoutnd = nn.Dropout2d(p=0.5) if backbone not in ['dino_v2', 'clip'] else nn.Dropout(p=0.5)
 
         self.downsample_query = nn.Sequential(
             convnd,        # nn.Conv2d(fea_dim, hidden_dim, kernel_size=1, padding=0, bias=False),
@@ -332,11 +355,51 @@ class VRP_encoder(nn.Module):
 
         # with torch.no_grad():
             # config_dino = Dinov2Config()
-        if self.backbone_type == 'dino_v2':
+        if self.backbone_type == 'clip':
+            patch_size = 16
+            support_mask = F.interpolate(support_mask_ori.unsqueeze(1).float(), size=(patch_size, patch_size), mode='nearest')
+            support_mask = support_mask.squeeze(1).unsqueeze(-1)
+            # dummy_input = torch.randn(1, 3, 224, 224)
+            outputs_clip_supp = self.clip_model(support_img)['hidden_states']
+
+            supp_feat_0 = outputs_clip_supp[0]
+            supp_feat_1 = outputs_clip_supp[7]
+            supp_feat_2 = outputs_clip_supp[11]
+            supp_feat_3 = outputs_clip_supp[20]
+            supp_feat_4 = outputs_clip_supp[-1]
+
+            outputs_clip_query = self.clip_model(query_img)['hidden_states']
+            query_feat_0 = outputs_clip_query[0]
+            query_feat_1 = outputs_clip_query[7]
+            query_feat_2 = outputs_clip_query[11]
+            query_feat_3 = outputs_clip_query[20]
+            query_feat_4 = outputs_clip_query[-1]
+
+            query_feat = torch.cat([query_feat_2, query_feat_3], 2)
+            supp_feat = torch.cat([supp_feat_2, supp_feat_3], 2)
+
+            pseudo_mask = self.get_pseudo_dino_mask(supp_feat_4, query_feat_4, support_mask)
+
+            query_feat = query_feat[:, 1:]    #self.channel_to_256(query_feat)
+
+            
+            query_feat = self.downsample_query(query_feat.permute(0, 2, 1))
+            query_feat = query_feat.view(query_feat.size(0), query_feat.size(1), patch_size, patch_size)
+
+            supp_feat = supp_feat[:, 1:]       #self.channel_to_256(supp_feat)
+            supp_feat = self.downsample_query(supp_feat.permute(0, 2, 1))
+            supp_feat = supp_feat.view(supp_feat.size(0), supp_feat.size(1), patch_size, patch_size)
+
+            support_mask = support_mask.permute(0, 3, 1, 2)
+
+
+
+
+            
+
+        elif self.backbone_type == 'dino_v2':
             # large dino v2 has up to 25 (0-24) hidden states
             
-            # bp()
-
             patch_size = 16  # patch size without class token
             # just to make sure the patch size is 14x14 but the total patch num is 16x16
             support_mask = F.interpolate(support_mask_ori.unsqueeze(1).float(), size=(patch_size, patch_size), mode='nearest')
@@ -511,7 +574,7 @@ class VRP_encoder(nn.Module):
             query_feat = self.downsample_query(query_feat) # [4, 256, 32, 32]
             supp_feat = self.downsample_query(supp_feat)
 
-        prototype = self.mask_feature(supp_feat, support_mask) if self.backbone_type != 'dino_v2' else \
+        prototype = self.mask_feature(supp_feat, support_mask) if self.backbone_type not in ['dino_v2', 'clip'] else \
                 self.mask_feature_dino(supp_feat, support_mask)
         supp_feat_bin = prototype.repeat(1, 1, query_feat.shape[2], query_feat.shape[3])
     
@@ -524,6 +587,7 @@ class VRP_encoder(nn.Module):
 
         protos = self.transformer_decoder(query_feat_1, supp_feat_1, support_mask)
         # protos = self.transformer_decoder(query_feat, supp_feat, support_mask)
+        
         return protos, support_mask_ori
 
     
@@ -578,7 +642,7 @@ class VRP_encoder(nn.Module):
     def train_mode(self):
         self.train()
         self.apply(fix_bn)
-        if self.backbone_type != 'dino_v2':
+        if self.backbone_type != 'dino_v2' and self.backbone_type != 'clip':
             self.layer0.eval(), self.layer1.eval(), self.layer2.eval(), self.layer3.eval(), self.layer4.eval()
 
 

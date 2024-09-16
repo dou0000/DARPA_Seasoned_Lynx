@@ -87,9 +87,9 @@ def train(args, epoch, model, sam_model, dataloader, optimizer, scheduler, train
         # support_masks : support_masks
 
 
-        curr_input_img = batch['query_img'] if args.backbone != 'dino_v2' \
+        curr_input_img = batch['query_img'] if args.backbone not in ['dino_v2', 'clip'] \
                             else batch['query_img_dino']
-        curr_support_img = batch['support_imgs'].squeeze(1) if args.backbone != 'dino_v2' \
+        curr_support_img = batch['support_imgs'].squeeze(1) if args.backbone not in ['dino_v2', 'clip'] \
                             else batch['support_img_dino'].squeeze(1)
         
         if args.clip_applied:
@@ -277,7 +277,7 @@ if __name__ == '__main__':
     parser.add_argument('--local-rank', type=int, default=0, help='number of cpu threads to use during batch generation')
     parser.add_argument('--num_query', type=int, default=50)
     
-    parser.add_argument('--backbone', type=str, default='dino_v2', choices=['vgg16', 'resnet50', 'resnet101', 'dino_v2', 'golden_muscat'])
+    parser.add_argument('--backbone', type=str, default='dino_v2', choices=['vgg16', 'resnet50', 'resnet101', 'dino_v2', 'clip', 'golden_muscat'])
     parser.add_argument('--parallel', type=bool, default=False)
     parser.add_argument('--mask_decoder_trainable', type=bool, default=False)
     parser.add_argument('--exp_name', type=str, default='exp_name')
@@ -341,7 +341,7 @@ if __name__ == '__main__':
 
     # bp()
 
-    if args.backbone != 'dino_v2':
+    if args.backbone != 'dino_v2' and args.backbone != 'clip':
         if args.parallel and not args.prompt_backbone_trainable:
             for param in model.module.layer0.parameters():
                 param.requires_grad = False

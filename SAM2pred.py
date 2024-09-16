@@ -91,7 +91,7 @@ class SAM_pred(nn.Module):
         binary_mask = torch.where(low_masks > 0, 1, 0)
         return low_masks, binary_mask
     
-    def forward(self, query_img, query_name, protos, points_mask=None):
+    def forward(self, query_img, protos, query_name=None, points_mask=None):
         B,C, h, w = query_img.shape
         
         # query_img = F.interpolate(query_img, (1024,1024), mode='bilinear', align_corners=True)
