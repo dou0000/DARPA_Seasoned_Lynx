@@ -256,7 +256,7 @@ class VRP_encoder(nn.Module):
         #     self.clip_model = openclip.
 
             
-
+            
         elif backbone == 'golden_muscat':
             golden_muscat = models.golden_muscat(pretrained=pretrained)
             self.layer0 = golden_muscat.layer0
