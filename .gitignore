@@ -16,3 +16,5 @@
 !/requirements.txt
 !/src/
 !/src/*.py
+!/src_additional/
+!/src_additional/*.py
